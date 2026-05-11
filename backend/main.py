@@ -48,6 +48,10 @@ async def ingest(file: UploadFile = File(...)):
     os.unlink(tmp_path)
     return {"message": f"Ingested {count} chunks successfully"}
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

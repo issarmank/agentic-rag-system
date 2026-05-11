@@ -1,14 +1,17 @@
+import os
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_classic.chains import ConversationalRetrievalChain
-from langchain_community.memory import ConversationBufferWindowMemory
+from langchain_openai import ChatOpenAI
+from langchain_classic.chains.conversational_retrieval.base import ConversationalRetrievalChain
+from langchain_classic.memory import ConversationBufferWindowMemory
 from retriever import get_retriever
 
 load_dotenv()
 
 def build_agent():
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash", 
+    llm = ChatOpenAI(
+        model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         temperature=0,
     )
     memory = ConversationBufferWindowMemory(

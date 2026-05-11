@@ -2,7 +2,7 @@ fastapi
 uvicorn
 langchain
 langchain-text-splitters
-langchain-google-genai
+langchain-openai
 langchain-qdrant
 langchain-community
 qdrant-client
