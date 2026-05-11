@@ -9,7 +9,7 @@ load_dotenv()
 
 def build_agent():
     llm = ChatOpenAI(
-        model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash"),
+        model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
         api_key=os.getenv("OPENROUTER_API_KEY"),
         base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         temperature=0,
