@@ -82,3 +82,77 @@ body {
   background-size: 200% 200%;
   animation: gradient 6s ease infinite;
 }
+
+/* Markdown Typography Styles */
+.prose {
+  color: var(--foreground);
+}
+
+.prose strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.5rem;
+}
+
+.prose li {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.prose code {
+  color: var(--accent-light);
+  background-color: var(--navy-medium);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-weight: 500;
+}
+
+.prose pre {
+  background-color: var(--navy-medium);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.prose pre code {
+  background-color: transparent;
+  padding: 0;
+  color: var(--foreground);
+  font-size: 0.875rem;
+}
+
+.prose blockquote {
+  border-left: 4px solid var(--accent-blue);
+  padding-left: 1rem;
+  font-style: italic;
+  color: #d1d9e6;
+}
+
+.prose a {
+  color: var(--accent-light);
+  text-decoration: underline;
+  text-decoration-color: rgba(107, 182, 255, 0.3);
+}
+
+.prose a:hover {
+  text-decoration-color: var(--accent-light);
+}
+
+.prose p {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+}

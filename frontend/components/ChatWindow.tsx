@@ -1,7 +1,14 @@
 "use client";
 import { useState, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 
-type Message = { role: "user" | "assistant"; content: string; sources?: Source[] };
+
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  sources?: Source[];
+  grounded?: boolean;
+};
 type Source = { page: string | number; snippet: string };
 
 export default function ChatWindow() {
@@ -43,16 +50,21 @@ export default function ChatWindow() {
     const data = await res.json();
     setMessages((prev) => [
       ...prev,
-      { role: "assistant", content: data.answer, sources: data.sources },
+      {
+        role: "assistant",
+        content: data.answer,
+        sources: data.sources,
+        grounded: data.grounded !== false // Default to true if not provided
+      },
     ]);
     setLoading(false);
   }
 
   const suggestedPrompts = [
-    { icon: "📚", text: "Summarize the document", query: "Can you provide a comprehensive summary of the document?" },
-    { icon: "🔍", text: "Key insights", query: "What are the key insights and main points from this document?" },
-    { icon: "💡", text: "Explain concepts", query: "Can you explain the main concepts in simple terms?" },
-    { icon: "❓", text: "Ask questions", query: "What questions can I ask about this document?" },
+    { icon: "📄", text: "Summarize the document", query: "Please summarize the key points covered in this document." },
+    { icon: "📋", text: "Main topics", query: "What are the main topics and sections covered in this document?" },
+    { icon: "🎯", text: "Key requirements", query: "What are the key requirements or deliverables mentioned in this document?" },
+    { icon: "💡", text: "Explain a concept", query: "Can you explain [specific concept from document]?" },
   ];
 
   return (
@@ -72,8 +84,11 @@ export default function ChatWindow() {
                 Welcome to Agentify
               </h2>
               <p className="text-lg text-gray-400 max-w-2xl">
-                Upload your documents and chat with them using AI. Get instant answers, summaries, and insights from your PDFs.
+                Upload a PDF document and ask questions about its content. Get accurate, grounded answers directly from your document.
               </p>
+              <div className="mt-4 px-4 py-2 bg-[#1a2942] border border-[#4a90e2]/30 rounded-lg text-sm text-gray-300 max-w-2xl">
+                <span className="font-semibold text-[#6bb6ff]">💡 Pro tip:</span> Answers are derived exclusively from your uploaded document - no external knowledge or hallucinations.
+              </div>
             </div>
 
             {/* Suggested Prompts */}
@@ -98,12 +113,12 @@ export default function ChatWindow() {
             </div>
 
             {/* Features */}
-            <div className="flex gap-6 text-sm text-gray-400">
+            <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-400">
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-[#4a90e2]" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>Smart AI Responses</span>
+                <span>Document-Only Answers</span>
               </div>
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-[#4a90e2]" fill="currentColor" viewBox="0 0 20 20">
@@ -115,7 +130,7 @@ export default function ChatWindow() {
                 <svg className="w-5 h-5 text-[#4a90e2]" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>Fast Processing</span>
+                <span>No Hallucinations</span>
               </div>
             </div>
           </div>
@@ -129,7 +144,13 @@ export default function ChatWindow() {
                     ? "bg-gradient-to-r from-[#4a90e2] to-[#6bb6ff] text-white"
                     : "bg-[#1a2942] text-gray-100 border border-white/10"
                 }`}>
-                  <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                  {msg.role === "user" ? (
+                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                  ) : (
+                    <div className="prose prose-invert max-w-none">
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    </div>
+                  )}
                   {msg.sources && msg.sources.length > 0 && (
                     <details className="mt-3 text-xs opacity-80">
                       <summary className="cursor-pointer hover:opacity-100 transition-opacity flex items-center gap-1">
