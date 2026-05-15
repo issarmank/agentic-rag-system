@@ -12,4 +12,11 @@ def get_retriever():
         api_key=os.getenv("QDRANT_API_KEY"),
         collection_name=os.getenv("QDRANT_COLLECTION"),
     )
-    return vectorstore.as_retriever(search_kwargs={"k": 4})
+    return vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 4,
+            "fetch_k": 8,
+            "lamda_mult": 0.7,
+        }
+    )
