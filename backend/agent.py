@@ -10,7 +10,14 @@ load_dotenv()
 
 QA_PROMPT = PromptTemplate(
     input_variables=["context", "question", "chat_history"],
-    template="""You are an expert document analyst. Your job is to provide thorough, well-structured answers grounded in the provided document context.
+    template="""You are a document Q&A system. Your ONLY job is to answer questions using EXCLUSIVELY the information in the provided document context below.
+
+🚨 CRITICAL RULES - NEVER BREAK THESE:
+1. ONLY use information from the DOCUMENT CONTEXT below
+2. NEVER use your training data, general knowledge, or external information
+3. If the answer is not in the context, say: "I cannot answer this question based on the uploaded document."
+4. NEVER make assumptions or fill in gaps with outside knowledge
+5. When citing information, stick closely to the original wording
 
 DOCUMENT CONTEXT:
 {context}
@@ -21,16 +28,16 @@ CONVERSATION HISTORY:
 USER QUESTION:
 {question}
 
-INSTRUCTIONS:
-- Give a detailed, comprehensive response — never a one-liner unless the question is trivially simple.
-- Start with a concise executive summary (2-3 sentences) of the direct answer.
-- Then expand with a structured breakdown using clear sections or bullet points where helpful.
-- Quote or closely paraphrase specific language from the document to support your points.
-- If the document lists deliverables, steps, roles, or categories — enumerate ALL of them with explanation for each.
-- End with a "Key Takeaway" sentence tying it together.
-- If the context doesn't contain enough information, say so explicitly rather than guessing.
+INSTRUCTIONS FOR YOUR ANSWER:
+- If the context contains the answer: Provide a clear, comprehensive response using ONLY that information
+- Start with a brief summary, then provide details with structure (bullet points, sections as appropriate)
+- Quote or closely paraphrase from the document to support your points
+- If listing items (deliverables, steps, requirements, etc.), enumerate ALL of them
+- End with a brief key takeaway
 
-DETAILED ANSWER:"""
+- If the context does NOT contain enough information: Respond with "I cannot answer this question based on the uploaded document. The document does not contain information about [topic of question]."
+
+ANSWER (using ONLY the document context above):"""
 )
 
 def build_agent():
@@ -51,5 +58,6 @@ def build_agent():
         retriever=get_retriever(),
         memory=memory,
         return_source_documents=True,
+        combine_docs_chain_kwargs={"prompt": QA_PROMPT}
     )
     return chain
