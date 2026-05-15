@@ -23,3 +23,8 @@ def get_retriever():
             "lambda_mult": 0.7,
         }
     )
+
+def check_relevance(query: str, retrieved_docs, threshold: float = 0.3):
+    has_docs = bool(retrieved_docs)
+    max_score = 1.0 if has_docs else 0.0
+    return {"is_relevant": (max_score >= threshold), "max_score": max_score}

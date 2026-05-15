@@ -33,7 +33,7 @@ async def chat(req: ChatRequest):
         retrieved_docs = result.get("source_documents", [])
         
         # Check if documents are actually relevant (prevents hallucination)
-        relevance = check_relevance(req.message, retrieved_docs, threshold=0.3)
+        relevance = check_relevance(req.message, retrieved_docs)
         
         # Check if LLM response indicates it couldn't answer from the document
         answer_lower = result["answer"].lower()
