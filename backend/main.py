@@ -9,10 +9,13 @@ from retriever import check_relevance
 
 app = FastAPI()
 
-# Allow Next.js dev server to call this API
+_origins = ["http://localhost:3000"]
+if frontend_url := os.getenv("FRONTEND_URL"):
+    _origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
