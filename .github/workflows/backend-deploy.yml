@@ -49,10 +49,5 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway
-        run: railway up --service backend --image ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Trigger Render deploy
+        run: curl "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
