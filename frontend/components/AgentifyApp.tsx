@@ -20,6 +20,9 @@ export default function AgentifyApp() {
   const [q, setQ] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const charBufferRef = useRef('');
+  const streamDoneRef = useRef(false);
+  const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const active = chats.find((c) => c.id === activeId);
   const isEmpty = !active || active.messages.length === 0;
@@ -68,25 +71,112 @@ export default function AgentifyApp() {
     setInput('');
     setThinking(true);
 
+    // Reset drip state for this request
+    charBufferRef.current = '';
+    streamDoneRef.current = false;
+    if (dripIntervalRef.current) {
+      clearInterval(dripIntervalRef.current);
+      dripIntervalRef.current = null;
+    }
+
+    // Drip one character at a time from the buffer into the last assistant message.
+    // Adjust the interval (ms) to control typing speed — lower = faster.
+    const CHAR_DELAY_MS = 18;
+
+    const startDrip = (chatId: string) => {
+      if (dripIntervalRef.current) return;
+      dripIntervalRef.current = setInterval(() => {
+        if (charBufferRef.current.length === 0) {
+          if (streamDoneRef.current) {
+            clearInterval(dripIntervalRef.current!);
+            dripIntervalRef.current = null;
+          }
+          return;
+        }
+        const char = charBufferRef.current[0];
+        charBufferRef.current = charBufferRef.current.slice(1);
+        setChats((cs) =>
+          cs.map((c) => {
+            if (c.id !== chatId) return c;
+            const msgs = [...c.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === 'assistant') {
+              msgs[msgs.length - 1] = { ...last, text: last.text + char };
+            }
+            return { ...c, messages: msgs };
+          })
+        );
+      }, CHAR_DELAY_MS);
+    };
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
       });
-      const data = await res.json();
-      const assistantMsg: Message = {
-        role: 'assistant',
-        text: data.answer ?? data.detail ?? 'No response.',
-        sources: data.sources,
-      };
-      setChats((cs) =>
-        cs.map((c) =>
-          c.id === currentId
-            ? { ...c, messages: [...c.messages, assistantMsg] }
-            : c
-        )
-      );
+
+      if (!res.body) throw new Error('No response body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let firstToken = true;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          let event: { type: string; content?: string; sources?: Message['sources'] };
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.type === 'token' && event.content) {
+            if (firstToken) {
+              firstToken = false;
+              setThinking(false);
+              // Add empty assistant message — drip will fill it character by character
+              setChats((cs) =>
+                cs.map((c) =>
+                  c.id === currentId
+                    ? { ...c, messages: [...c.messages, { role: 'assistant' as const, text: '', sources: [] }] }
+                    : c
+                )
+              );
+            }
+            charBufferRef.current += event.content;
+            startDrip(currentId!);
+          } else if (event.type === 'done' && event.sources?.length) {
+            const sources = event.sources;
+            // Attach sources once the drip finishes draining
+            const attachSources = () => {
+              if (charBufferRef.current.length > 0 || dripIntervalRef.current) {
+                setTimeout(attachSources, 50);
+                return;
+              }
+              setChats((cs) =>
+                cs.map((c) => {
+                  if (c.id !== currentId) return c;
+                  const msgs = [...c.messages];
+                  const last = msgs[msgs.length - 1];
+                  if (last?.role === 'assistant') {
+                    msgs[msgs.length - 1] = { ...last, sources };
+                  }
+                  return { ...c, messages: msgs };
+                })
+              );
+            };
+            attachSources();
+          }
+        }
+      }
     } catch {
       setChats((cs) =>
         cs.map((c) =>
@@ -103,6 +193,7 @@ export default function AgentifyApp() {
       );
     } finally {
       setThinking(false);
+      streamDoneRef.current = true;
     }
   };
 
