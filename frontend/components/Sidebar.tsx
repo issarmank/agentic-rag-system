@@ -1,7 +1,7 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { IconEdit, IconSidebar, IconSearch, IconMore, IconTrash } from './Icons';
+import { IconEdit, IconSidebar, IconSearch, IconMore, IconTrash, IconSettings, IconHelpCircle } from './Icons';
 import type { Chat } from './types';
 
 type BucketKey = 'Today' | 'Yesterday' | 'Previous 7 days' | 'Previous 30 days' | 'Older';
@@ -70,7 +70,7 @@ export default function Sidebar({
           style={{ background: 'var(--panel)' }}
         >
           <div
-            className="h-full w-[272px] flex flex-col"
+            className="h-full w-68 flex flex-col"
             style={{ borderRight: '1px solid var(--line)' }}
           >
             {/* Header */}
@@ -157,29 +157,98 @@ export default function Sidebar({
             </div>
 
             {/* Footer */}
-            <div className="px-3 py-3" style={{ borderTop: '1px solid var(--line)' }}>
-              <div className="flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg hover:bg-black/5 cursor-pointer transition">
-                <div
-                  className="h-8 w-8 rounded-full grid place-items-center text-[12px] font-semibold"
-                  style={{ background: 'var(--accent)', color: '#fff' }}
-                >
-                  A
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div
-                    className="text-[13px] font-medium truncate"
-                    style={{ color: 'var(--ink)' }}
-                  >
-                    You
-                  </div>
-                </div>
-                <IconMore size={16} style={{ color: 'var(--muted)' }} />
-              </div>
+            <div className="px-3 py-3 shrink-0" style={{ borderTop: '1px solid var(--line)' }}>
+              <SidebarFooterMenu />
             </div>
           </div>
         </motion.aside>
       )}
     </AnimatePresence>
+  );
+}
+
+function SidebarFooterMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const items = [
+    {
+      label: 'Settings',
+      icon: <IconSettings size={15} />,
+      onClick: () => { window.location.href = '/settings'; },
+    },
+    {
+      label: 'FAQ',
+      icon: <IconHelpCircle size={15} />,
+      onClick: () => { window.location.href = '/faq'; },
+    },
+  ];
+
+  return (
+    <div ref={ref} className="relative">
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            key="footer-menu"
+            initial={{ opacity: 0, scale: 0.95, y: 4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 4 }}
+            transition={{ duration: 0.12, ease: 'easeOut' }}
+            className="absolute bottom-full mb-2 left-0 right-0 rounded-xl overflow-hidden z-50"
+            style={{
+              background: 'var(--bg)',
+              border: '1px solid var(--line-2)',
+              boxShadow: '0 -4px 24px rgba(43,37,32,0.10), 0 2px 6px rgba(43,37,32,0.06)',
+            }}
+          >
+            <div className="py-1">
+              {items.map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => { setOpen(false); item.onClick(); }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-left hover:bg-black/5 transition"
+                  style={{ color: 'var(--ink)' }}
+                >
+                  <span style={{ color: 'var(--muted)' }}>{item.icon}</span>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg hover:bg-black/5 transition">
+        <div
+          className="h-8 w-8 rounded-full grid place-items-center text-[12px] font-semibold shrink-0"
+          style={{ background: 'var(--accent)', color: '#fff' }}
+        >
+          A
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-medium truncate" style={{ color: 'var(--ink)' }}>
+            You
+          </div>
+        </div>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="h-7 w-7 grid place-items-center rounded-md hover:bg-black/10 transition shrink-0"
+          style={{ color: 'var(--muted)' }}
+          title="More options"
+        >
+          <IconMore size={16} />
+        </button>
+      </div>
+    </div>
   );
 }
 
