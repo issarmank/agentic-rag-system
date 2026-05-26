@@ -42,7 +42,7 @@ export default function Composer({
     <div className="px-6 pb-6 pt-2 shrink-0">
       <div className="max-w-190 mx-auto">
         {uploadStatus && (
-          <div className="mb-2 text-[12.5px]" style={{ color: 'var(--accent)' }}>
+          <div className="mb-2 text-[12.5px]" style={{ color: 'var(--ink)' }}>
             {uploadStatus}
           </div>
         )}
