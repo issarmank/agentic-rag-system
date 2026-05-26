@@ -1,8 +1,8 @@
 'use client';
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import Sources from './Sources';
-import { IconCopy, IconCheck, IconThumbUp, IconThumbDn, IconRefresh } from './Icons';
+import { IconCopy, IconCheck, IconThumbUp, IconThumbDn } from './Icons';
 import type { Message } from './types';
 
 interface MessageListProps {
@@ -10,6 +10,7 @@ interface MessageListProps {
   thinking: boolean;
   showSources?: boolean;
   density?: 'compact' | 'comfortable' | 'roomy';
+  docName?: string;
 }
 
 export default function MessageList({
@@ -17,6 +18,7 @@ export default function MessageList({
   thinking,
   showSources = true,
   density = 'comfortable',
+  docName,
 }: MessageListProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,9 +32,9 @@ export default function MessageList({
 
   return (
     <div ref={ref} className="flex-1 overflow-y-auto scroll-clean">
-      <div className={`max-w-[760px] mx-auto px-6 ${pad} flex flex-col`}>
+      <div className={`max-w-190 mx-auto px-6 ${pad} flex flex-col`}>
         {messages.map((m, i) => (
-          <ChatMessage key={i} m={m} showSources={showSources} />
+          <ChatMessage key={i} m={m} showSources={showSources} docName={docName} />
         ))}
         {thinking && <ThinkingDots />}
       </div>
@@ -40,7 +42,7 @@ export default function MessageList({
   );
 }
 
-function ChatMessage({ m, showSources }: { m: Message; showSources: boolean }) {
+function ChatMessage({ m, showSources, docName }: { m: Message; showSources: boolean; docName?: string }) {
   if (m.role === 'user') {
     return (
       <div className="self-end max-w-[78%]">
@@ -55,19 +57,43 @@ function ChatMessage({ m, showSources }: { m: Message; showSources: boolean }) {
   }
   return (
     <div className="self-stretch">
-      <div className="prose text-[14.5px]" style={{ color: 'var(--ink)' }}>
+      <div className="prose text-[14.5px] [&_ul]:pl-4 [&_ol]:pl-4 [&_blockquote]:pl-3" style={{ color: 'var(--ink)' }}>
         <ReactMarkdown>{m.text}</ReactMarkdown>
       </div>
       {showSources && m.sources && m.sources.length > 0 && (
-        <Sources sources={m.sources} />
+        <Sources sources={m.sources} docName={docName} />
       )}
       <MsgActions text={m.text} />
     </div>
   );
 }
 
+function ActionBtn({
+  children,
+  onClick,
+  title,
+  style,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  title?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="h-7 w-7 grid place-items-center rounded-md hover:bg-black/5 transition"
+      style={{ color: 'var(--muted)', ...style }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function MsgActions({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const [vote, setVote] = useState<'up' | 'down' | null>(null);
 
   const copy = () => {
     navigator.clipboard?.writeText(text);
@@ -75,33 +101,25 @@ function MsgActions({ text }: { text: string }) {
     setTimeout(() => setCopied(false), 1400);
   };
 
-  const Btn = ({
-    children,
-    onClick,
-    title,
-  }: {
-    children: React.ReactNode;
-    onClick?: () => void;
-    title?: string;
-  }) => (
-    <button
-      onClick={onClick}
-      title={title}
-      className="h-7 w-7 grid place-items-center rounded-md hover:bg-black/5 transition"
-      style={{ color: 'var(--muted)' }}
-    >
-      {children}
-    </button>
-  );
-
   return (
     <div className="mt-2 -ml-1.5 flex items-center gap-0.5">
-      <Btn onClick={copy} title="Copy">
+      <ActionBtn onClick={copy} title="Copy">
         {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-      </Btn>
-      <Btn title="Good response"><IconThumbUp size={14} /></Btn>
-      <Btn title="Bad response"><IconThumbDn size={14} /></Btn>
-      <Btn title="Regenerate"><IconRefresh size={14} /></Btn>
+      </ActionBtn>
+      <ActionBtn
+        onClick={() => setVote(vote === 'up' ? null : 'up')}
+        title="Good response"
+        style={{ color: vote === 'up' ? '#22c55e' : 'var(--muted)' }}
+      >
+        <IconThumbUp size={14} />
+      </ActionBtn>
+      <ActionBtn
+        onClick={() => setVote(vote === 'down' ? null : 'down')}
+        title="Bad response"
+        style={{ color: vote === 'down' ? '#ef4444' : 'var(--muted)' }}
+      >
+        <IconThumbDn size={14} />
+      </ActionBtn>
     </div>
   );
 }
