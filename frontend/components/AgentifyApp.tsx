@@ -109,11 +109,16 @@ export default function AgentifyApp() {
       }, CHAR_DELAY_MS);
     };
 
+    const history = (active?.messages ?? []).map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, history }),
       });
 
       if (!res.body) throw new Error('No response body');
@@ -272,6 +277,7 @@ export default function AgentifyApp() {
             thinking={thinking}
             showSources
             density="comfortable"
+            docName={active!.doc?.name}
           />
         )}
 

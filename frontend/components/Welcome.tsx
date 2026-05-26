@@ -8,7 +8,7 @@ interface WelcomeProps {
 export default function Welcome({ onPick, serif = true }: WelcomeProps) {
   return (
     <div className="flex-1 grid place-items-center px-6">
-      <div className="max-w-[680px] w-full text-center">
+      <div className="max-w-170 w-full text-center">
         <h1
           className={
             serif
