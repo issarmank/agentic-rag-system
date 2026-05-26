@@ -41,6 +41,11 @@ def ingest_pdf(file_path: str) -> int:
     parser = LlamaParse(
         api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
         result_type="markdown",
+        parsing_instruction=(
+            "Extract all text, tables, and figures. "
+            "Preserve section headings, numbered lists, and table structure. "
+            "For tables, output them in markdown table format."
+        ),
     )
     llama_docs = parser.load_data(file_path)
     if not llama_docs:

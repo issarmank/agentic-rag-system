@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from agent import get_llm
 from retriever import search_with_scores
 from ingest import ingest_pdf
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 app = FastAPI()
 
@@ -22,38 +23,67 @@ app.add_middleware(
 
 _llm = get_llm()
 
-# Cosine similarity threshold — below this score we consider the question out of scope.
-RELEVANCE_THRESHOLD = 0.30
+_BROAD_KEYWORDS = {
+    "summarize", "summary", "overview", "what topics", "what is covered",
+    "what does this", "what's in this", "what is this document", "tell me about",
+    "what topic", "explain this document",
+}
 
-PROMPT = """\
-You are a precise document assistant. Your ONLY source of information is the document excerpts below.
+_CONVERSATIONAL_SIGNALS = {
+    "thanks", "thank you", "thx", "ty", "sounds good", "great", "awesome",
+    "cool", "perfect", "nice", "ok", "okay", "got it", "makes sense", "i see",
+    "interesting", "hi", "hello", "hey", "good morning", "good afternoon",
+    "good evening", "bye", "goodbye", "cheers", "appreciate it", "helpful",
+    "that helps", "no worries", "sure", "yep", "yeah", "nope",
+}
 
-STRICT RULES:
-- Answer exclusively using the DOCUMENT EXCERPTS provided.
-- If the answer is not found in the excerpts, say exactly:
-  "This topic isn't covered in the uploaded document. Please ask something related to its content."
-- Never draw on external knowledge or training data.
-- Never guess, infer, or fill gaps from memory.
+def _is_conversational(message: str) -> bool:
+    q = message.lower().strip().rstrip("!.,?")
+    if q in _CONVERSATIONAL_SIGNALS:
+        return True
+    if any(q.startswith(sig) for sig in _CONVERSATIONAL_SIGNALS):
+        return True
+    return False
 
-FORMAT (follow this for every response):
-- Lead with a direct, one-sentence answer.
-- Use **bold** for key terms.
-- Use bullet points for lists or multiple points.
-- Use numbered steps for processes or sequences.
-- Keep paragraphs short (2–3 sentences max).
-- If quoting the document, use "quotation marks" and note the page.
+def _is_broad_query(query: str) -> bool:
+    q = query.lower()
+    return any(kw in q for kw in _BROAD_KEYWORDS)
+
+def _retrieval_query(message: str, history: list) -> str:
+    if history:
+        last_user = next(
+            (h.content for h in reversed(history) if h.role == "user"), None
+        )
+        if last_user:
+            return f"{last_user} {message}"
+    return message
+
+SYSTEM_TEMPLATE = """\
+You are a helpful, friendly document assistant. The user has uploaded a document and you help them understand it.
+
+When answering questions about the document:
+- Ground your answer in the DOCUMENT EXCERPTS provided below.
+- Be direct and clear — lead with the key fact, then add detail if useful.
+- Use **bold** for key terms, bullet points for lists, numbered steps for sequences.
+- Keep paragraphs short (2–3 sentences).
+- If the excerpts don't contain the answer, say so naturally — e.g. "I don't see that in the document."
+- If quoting the document, use "quotation marks".
 
 DOCUMENT EXCERPTS:
-{context}
+{context}"""
 
-QUESTION: {question}
+CONVERSATIONAL_SYSTEM = """\
+You are a warm, friendly AI assistant. Keep replies concise and natural.
+If the user asks a general knowledge question, answer it helpfully.
+If the conversation turns to a document, let them know they can upload one."""
 
-ANSWER:"""
-
+class HistoryMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
 
 class ChatRequest(BaseModel):
     message: str
-
+    history: list[HistoryMessage] = []
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
@@ -62,9 +92,28 @@ def _sse(payload: dict) -> str:
 @app.post("/chat")
 async def chat(req: ChatRequest):
     async def generate():
+        # --- conversational bypass (no retrieval needed) ---
+        if _is_conversational(req.message):
+            messages = [SystemMessage(content=CONVERSATIONAL_SYSTEM)]
+            for h in req.history[-12:]:
+                messages.append(HumanMessage(content=h.content) if h.role == "user" else AIMessage(content=h.content))
+            messages.append(HumanMessage(content=req.message))
+            async for chunk in _llm.astream(messages):
+                raw = chunk.content
+                text = (
+                    "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in raw)
+                    if isinstance(raw, list) else str(raw)
+                )
+                if text:
+                    yield _sse({"type": "token", "content": text})
+            yield _sse({"type": "done", "sources": [], "grounded": False})
+            return
+
         # --- retrieve ---
+        broad = _is_broad_query(req.message)
+        query = "document overview summary" if broad else _retrieval_query(req.message, req.history)
         try:
-            docs_with_scores = await asyncio.to_thread(search_with_scores, req.message, 4)
+            docs_with_scores = await asyncio.to_thread(search_with_scores, query, 4)
         except Exception as e:
             yield _sse({"type": "token", "content": f"Search error: {e}"})
             yield _sse({"type": "done", "sources": [], "grounded": False})
@@ -72,13 +121,6 @@ async def chat(req: ChatRequest):
 
         if not docs_with_scores:
             yield _sse({"type": "token", "content": "No document has been uploaded yet. Please attach a PDF using the paperclip button."})
-            yield _sse({"type": "done", "sources": [], "grounded": False})
-            return
-
-        max_score = max(score for _, score in docs_with_scores)
-
-        if max_score < RELEVANCE_THRESHOLD:
-            yield _sse({"type": "token", "content": "This topic isn't covered in the uploaded document. Please ask something related to its content."})
             yield _sse({"type": "done", "sources": [], "grounded": False})
             return
 
@@ -92,15 +134,21 @@ async def chat(req: ChatRequest):
             {"page": doc.metadata.get("page", "?"), "snippet": doc.page_content[:200]}
             for doc in relevant_docs
         ]
-        prompt = PROMPT.format(context=context, question=req.message)
+        system_content = SYSTEM_TEMPLATE.format(context=context)
+        messages = [SystemMessage(content=system_content)]
+        for h in req.history[-12:]:
+            messages.append(HumanMessage(content=h.content) if h.role == "user" else AIMessage(content=h.content))
+        messages.append(HumanMessage(content=req.message))
 
-        # --- stream LLM tokens ---
-        try:
-            async for chunk in _llm.astream(prompt):
-                if chunk.content:
-                    yield _sse({"type": "token", "content": chunk.content})
-        except Exception as e:
-            yield _sse({"type": "token", "content": f"\n\n[Error while generating: {e}]"})
+        async for chunk in _llm.astream(messages):
+            raw = chunk.content
+            text = (
+                "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in raw)
+                if isinstance(raw, list)
+                else str(raw)
+            )
+            if text:
+                yield _sse({"type": "token", "content": text})
 
         yield _sse({"type": "done", "sources": sources, "grounded": True})
 
