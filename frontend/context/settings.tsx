@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useSyncExternalStore, useCallback, useEffect } from 'react';
 
 export type Palette = 'bone' | 'sand' | 'linen' | 'paper';
 export type Theme = 'light' | 'dark';
@@ -60,6 +60,45 @@ function applyVars(s: Settings) {
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
 }
 
+// ---------------------------------------------------------------------------
+// Module-level external store — lives outside React, no setState in effects
+// ---------------------------------------------------------------------------
+
+function readStorage(): Settings {
+  try {
+    const raw = localStorage.getItem('app-settings');
+    return raw ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) } : DEFAULTS;
+  } catch {
+    return DEFAULTS;
+  }
+}
+
+let _current: Settings = DEFAULTS;
+const _listeners = new Set<() => void>();
+
+// Initialise from localStorage on the client as soon as this module loads
+if (typeof window !== 'undefined') {
+  _current = readStorage();
+}
+
+function getSnapshot(): Settings { return _current; }
+function getServerSnapshot(): Settings { return DEFAULTS; }
+function subscribe(cb: () => void): () => void {
+  _listeners.add(cb);
+  return () => _listeners.delete(cb);
+}
+
+function writeSettings(next: Settings) {
+  _current = next;
+  localStorage.setItem('app-settings', JSON.stringify(next));
+  _listeners.forEach(fn => fn());
+  applyVars(next);
+}
+
+// ---------------------------------------------------------------------------
+// Context + Provider
+// ---------------------------------------------------------------------------
+
 interface SettingsCtx {
   settings: Settings;
   set: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
@@ -68,26 +107,14 @@ interface SettingsCtx {
 const Ctx = createContext<SettingsCtx | null>(null);
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
-  const [settings, setSettings] = useState<Settings>(DEFAULTS);
+  const settings = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  // Load persisted settings after hydration to avoid SSR/client mismatch
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem('app-settings');
-      if (stored) setSettings({ ...DEFAULTS, ...JSON.parse(stored) });
-    } catch {
-      // ignore corrupt storage
-    }
+  // Apply CSS vars on mount and whenever settings change
+  useEffect(() => { applyVars(settings); }, [settings]);
+
+  const set = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => {
+    writeSettings({ ..._current, [key]: value });
   }, []);
-
-  useEffect(() => {
-    applyVars(settings);
-    localStorage.setItem('app-settings', JSON.stringify(settings));
-  }, [settings]);
-
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-  };
 
   return <Ctx.Provider value={{ settings, set }}>{children}</Ctx.Provider>;
 }

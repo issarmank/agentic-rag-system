@@ -17,14 +17,8 @@ export default function Welcome({ onPick, serif = true }: WelcomeProps) {
           }
           style={{ color: 'var(--ink)' }}
         >
-          {serif ? (
-            <>
-              Ask anything about your{' '}
-              <span style={{ color: 'var(--accent)' }}>document</span>.
-            </>
-          ) : (
-            <>Ask anything.</>
-          )}
+          Ask anything about your{' '}
+          <span style={{ color: 'var(--accent)' }}>document</span>.
         </h1>
         <p className="mt-3 text-[15px]" style={{ color: 'var(--ink-soft)' }}>
           Drop a PDF, then ask away. Answers stay grounded to your document.
