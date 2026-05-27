@@ -7,7 +7,7 @@ langchain-qdrant
 langchain-community
 qdrant-client
 sentence-transformers
-pypdf
+llama-parse
 python-dotenv
 python-multipart
 numpy
