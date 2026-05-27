@@ -57,7 +57,7 @@ function ChatMessage({ m, showSources, docName }: { m: Message; showSources: boo
   }
   return (
     <div className="self-stretch">
-      <div className="prose text-[14.5px] [&_ul]:pl-4 [&_ol]:pl-4 [&_blockquote]:pl-3" style={{ color: 'var(--ink)' }}>
+      <div className="prose text-[14.5px]" style={{ color: 'var(--ink)' }}>
         <ReactMarkdown>{m.text}</ReactMarkdown>
       </div>
       {showSources && m.sources && m.sources.length > 0 && (

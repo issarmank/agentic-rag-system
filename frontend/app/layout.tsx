@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter, Instrument_Serif } from 'next/font/google';
 import './globals.css';
+import Providers from './providers';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -27,7 +28,7 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${instrumentSerif.variable} h-full antialiased`}
     >
-      <body className="h-full">{children}</body>
+      <body className="h-full"><Providers>{children}</Providers></body>
     </html>
   );
 }

@@ -6,12 +6,14 @@ import Welcome from './Welcome';
 import MessageList from './MessageList';
 import Composer from './Composer';
 import type { Chat, Message } from './types';
+import { useSettings } from '@/context/settings';
 
 function makeId() {
   return 'c' + Date.now();
 }
 
 export default function AgentifyApp() {
+  const { settings } = useSettings();
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -270,13 +272,13 @@ export default function AgentifyApp() {
         />
 
         {isEmpty ? (
-          <Welcome onPick={onSend} serif />
+          <Welcome onPick={onSend} serif={settings.serifWelcome} />
         ) : (
           <MessageList
             messages={active!.messages}
             thinking={thinking}
-            showSources
-            density="comfortable"
+            showSources={settings.showSources}
+            density={settings.density}
             docName={active!.doc?.name}
           />
         )}

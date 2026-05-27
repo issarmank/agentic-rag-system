@@ -1,6 +1,7 @@
 'use client';
-import { useState } from 'react';
 import Link from 'next/link';
+import { useSettings } from '@/context/settings';
+import type { Palette, Theme, Density } from '@/context/settings';
 
 const IconArrowLeft = () => (
   <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -82,22 +83,39 @@ function Pill({ options, value, onChange }: {
   );
 }
 
-export default function SettingsPage() {
-  const [showSources, setShowSources] = useState(true);
-  const [density, setDensity] = useState('comfortable');
-  const [serifWelcome, setSerifWelcome] = useState(true);
-  const [palette, setPalette] = useState('bone');
+function ThemeToggle({ value, onChange }: { value: Theme; onChange: (v: Theme) => void }) {
+  return (
+    <div className="flex rounded-lg overflow-hidden shrink-0"
+         style={{ border: '1px solid var(--line-2)', background: 'var(--panel)' }}>
+      {(['light', 'dark'] as Theme[]).map((t) => (
+        <button
+          key={t}
+          onClick={() => onChange(t)}
+          className="px-3 py-1.5 text-[12.5px] capitalize transition"
+          style={{
+            background: value === t ? 'var(--ink)' : 'transparent',
+            color: value === t ? 'var(--bg)' : 'var(--ink-soft)',
+          }}
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
 
-  const palettes = [
-    { id: 'bone',  swatch: '#f1ebe1' },
-    { id: 'sand',  swatch: '#eadfc9' },
-    { id: 'linen', swatch: '#ece6d8' },
-    { id: 'paper', swatch: '#f0ece4' },
-  ];
+const PALETTES: { id: Palette; swatch: string }[] = [
+  { id: 'bone',  swatch: '#f1ebe1' },
+  { id: 'sand',  swatch: '#eadfc9' },
+  { id: 'linen', swatch: '#ece6d8' },
+  { id: 'paper', swatch: '#f0ece4' },
+];
+
+export default function SettingsPage() {
+  const { settings, set } = useSettings();
 
   return (
     <div className="min-h-full" style={{ background: 'var(--bg)' }}>
-      {/* Header */}
       <div className="sticky top-0 z-10 h-14 px-3 flex items-center gap-2"
            style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}>
         <Link href="/"
@@ -111,21 +129,25 @@ export default function SettingsPage() {
         </span>
       </div>
 
-      {/* Body */}
       <div className="max-w-150 mx-auto px-6 pb-20">
         <SectionLabel title="Appearance" />
 
-        <Row label="Theme" description="Colour palette used across the app.">
+        <Row label="Mode" description="Switch between light and dark.">
+          <ThemeToggle value={settings.theme} onChange={(v) => set('theme', v)} />
+        </Row>
+
+        <Row label="Colour palette" description="Warm tone used in light mode.">
           <div className="flex items-center gap-2">
-            {palettes.map((p) => (
+            {PALETTES.map((p) => (
               <button
                 key={p.id}
-                onClick={() => setPalette(p.id)}
+                onClick={() => set('palette', p.id as Palette)}
                 title={p.id}
-                className="h-6 w-6 rounded-full transition-transform hover:scale-110"
+                disabled={settings.theme === 'dark'}
+                className="h-6 w-6 rounded-full transition-transform hover:scale-110 disabled:opacity-30 disabled:cursor-not-allowed"
                 style={{
                   background: p.swatch,
-                  border: palette === p.id ? '2px solid var(--ink)' : '1.5px solid var(--line-2)',
+                  border: settings.palette === p.id ? '2px solid var(--ink)' : '1.5px solid var(--line-2)',
                 }}
               />
             ))}
@@ -135,23 +157,22 @@ export default function SettingsPage() {
         <Row label="Welcome style" description="Font used on the home screen greeting.">
           <Pill
             options={['serif', 'sans']}
-            value={serifWelcome ? 'serif' : 'sans'}
-            onChange={(v) => setSerifWelcome(v === 'serif')}
+            value={settings.serifWelcome ? 'serif' : 'sans'}
+            onChange={(v) => set('serifWelcome', v === 'serif')}
           />
         </Row>
 
         <SectionLabel title="Chat" />
 
-        <Row label="Show sources"
-             description="Display page citations below each AI response.">
-          <Toggle value={showSources} onChange={setShowSources} />
+        <Row label="Show sources" description="Display document attribution below each response.">
+          <Toggle value={settings.showSources} onChange={(v) => set('showSources', v)} />
         </Row>
 
         <Row label="Message density" description="Spacing between messages in the chat.">
           <Pill
-            options={['compact', 'comfortable', 'roomy']}
-            value={density}
-            onChange={setDensity}
+            options={['compact', 'comfortable', 'roomy'] as Density[]}
+            value={settings.density}
+            onChange={(v) => set('density', v as Density)}
           />
         </Row>
 
