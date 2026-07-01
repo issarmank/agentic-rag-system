@@ -1,5 +1,7 @@
 # Agentic RAG System
 
+<img width="2934" height="1658" alt="image" src="https://github.com/user-attachments/assets/07f4d0d2-999f-4020-be44-437f7bef4c42" />
+
 A production-deployed Retrieval-Augmented Generation (RAG) system that enables users to upload PDF documents and query them conversationally. Every LLM response is strictly grounded in the document's content using vector similarity search, hallucination detection, and conversational memory.
 
 **Live Demo → [agentic-rag-system-ashy.vercel.app](https://agentic-rag-system-ashy.vercel.app)**
