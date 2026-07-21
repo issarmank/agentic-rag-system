@@ -1,14 +1,28 @@
-import os, json, tempfile, asyncio, traceback
+import os, json, tempfile, asyncio, traceback, uuid
+from contextlib import asynccontextmanager
+from arq import create_pool
+from arq.connections import ArqRedis, RedisSettings
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from agent import get_llm
 from retriever import search_with_scores
-from ingest import ingest_pdf
+from jobs import REDIS_URL, get_status
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-app = FastAPI()
+_arq_pool: ArqRedis | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _arq_pool
+    _arq_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+    yield
+    await _arq_pool.close()
+
+
+app = FastAPI(lifespan=lifespan)
 
 _origins = ["http://localhost:3000"]
 if frontend_url := os.getenv("FRONTEND_URL"):
@@ -172,9 +186,35 @@ async def ingest(file: UploadFile = File(...)):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
-    count = ingest_pdf(tmp_path)
-    os.unlink(tmp_path)
-    return {"message": f"Ingested {count} chunks successfully"}
+
+    job_id = uuid.uuid4().hex
+    await _arq_pool.enqueue_job("run_ingest", tmp_path, job_id, _job_id=job_id)
+    return {"job_id": job_id}
+
+
+@app.get("/ingest/status/{job_id}")
+async def ingest_status(job_id: str):
+    async def generate():
+        last_stage = None
+        waited = 0.0
+        while True:
+            status = await asyncio.to_thread(get_status, job_id)
+            if status and status != last_stage:
+                last_stage = status
+                yield _sse(status)
+                if status.get("stage") in ("done", "error"):
+                    return
+            await asyncio.sleep(0.4)
+            waited += 0.4
+            if waited > 600:
+                yield _sse({"stage": "error", "message": "Timed out waiting for ingestion"})
+                return
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/")

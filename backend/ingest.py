@@ -8,10 +8,13 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
+from jobs import set_status
+
 load_dotenv()
 
 COLLECTION = os.getenv("QDRANT_COLLECTION")
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 output size
+EMBED_BATCH_SIZE = 32
 
 _HEADERS_TO_SPLIT = [
     ("#", "h1"),
@@ -19,8 +22,12 @@ _HEADERS_TO_SPLIT = [
     ("###", "h3"),
 ]
 
+# Loaded once per process instead of once per ingest call.
+_embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+
+
 def get_embeddings():
-    return SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    return _embeddings
 
 
 def ensure_collection_exists(client: QdrantClient):
@@ -31,13 +38,19 @@ def ensure_collection_exists(client: QdrantClient):
             vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
         )
 
-def ingest_pdf(file_path: str) -> int:
+
+def ingest_pdf(file_path: str, job_id: str | None = None) -> int:
+    def progress(stage: str, **extra):
+        if job_id:
+            set_status(job_id, stage, **extra)
+
     client = QdrantClient(
         url=os.getenv("QDRANT_URL"),
         api_key=os.getenv("QDRANT_API_KEY"),
     )
 
     # Parse with LlamaParse vision model → structured markdown
+    progress("parsing")
     parser = LlamaParse(
         api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
         result_type="markdown",
@@ -61,6 +74,7 @@ def ingest_pdf(file_path: str) -> int:
     ]
 
     # Split on markdown headers first (semantic boundaries)
+    progress("chunking")
     md_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=_HEADERS_TO_SPLIT,
         strip_headers=False,
@@ -84,12 +98,19 @@ def ingest_pdf(file_path: str) -> int:
         client.delete_collection(COLLECTION)
     ensure_collection_exists(client)
 
-    # Embed and store
-    QdrantVectorStore.from_documents(
-        documents=chunks,
-        embedding=get_embeddings(),
-        url=os.getenv("QDRANT_URL"),
-        api_key=os.getenv("QDRANT_API_KEY"),
+    vectorstore = QdrantVectorStore(
+        client=client,
         collection_name=COLLECTION,
+        embedding=get_embeddings(),
     )
-    return len(chunks)
+
+    # Embed and store in batches so progress can be reported incrementally.
+    total = len(chunks)
+    progress("embedding", completed=0, total=total)
+    for start in range(0, total, EMBED_BATCH_SIZE):
+        batch = chunks[start:start + EMBED_BATCH_SIZE]
+        vectorstore.add_documents(batch)
+        progress("embedding", completed=min(start + EMBED_BATCH_SIZE, total), total=total)
+
+    progress("done", chunks=total)
+    return total

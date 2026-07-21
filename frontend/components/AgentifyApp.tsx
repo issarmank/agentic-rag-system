@@ -225,19 +225,59 @@ export default function AgentifyApp() {
 
     const form = new FormData();
     form.append('file', f);
+
+    const finalId = targetId;
+    const fail = (msg: string, delay = 4000) => {
+      setUploadStatus(msg);
+      setTimeout(() => setUploadStatus(''), delay);
+    };
+
     try {
       const res = await fetch('/api/ingest', { method: 'POST', body: form });
       const data = await res.json();
-      setUploadStatus(data.message || data.detail || 'Document uploaded successfully');
-      setChats((cs) =>
-        cs.map((c) =>
-          c.id === targetId ? { ...c, doc: { name: f.name, pages: '–' } } : c
-        )
-      );
+      if (!data.job_id) {
+        fail(data.detail || 'Upload failed. Please try again.');
+        return;
+      }
+
+      const source = new EventSource(`/api/ingest/status/${data.job_id}`);
+
+      source.onmessage = (ev) => {
+        let payload: { stage: string; completed?: number; total?: number; message?: string };
+        try { payload = JSON.parse(ev.data); } catch { return; }
+
+        switch (payload.stage) {
+          case 'parsing':
+            setUploadStatus('Parsing document…');
+            break;
+          case 'chunking':
+            setUploadStatus('Splitting into chunks…');
+            break;
+          case 'embedding':
+            setUploadStatus(`Embedding chunks… ${payload.completed ?? 0}/${payload.total ?? '?'}`);
+            break;
+          case 'done':
+            setUploadStatus('Document ready — ask away!');
+            setChats((cs) =>
+              cs.map((c) => (c.id === finalId ? { ...c, doc: { name: f.name, pages: '–' } } : c))
+            );
+            source.close();
+            setTimeout(() => setUploadStatus(''), 3000);
+            break;
+          case 'error':
+            source.close();
+            fail(payload.message || 'Ingestion failed. Please try again.');
+            break;
+        }
+      };
+
+      source.onerror = () => {
+        source.close();
+        fail('Lost connection while processing. Please retry.');
+      };
     } catch {
-      setUploadStatus('Upload failed. Please try again.');
+      fail('Upload failed. Please try again.');
     }
-    setTimeout(() => setUploadStatus(''), 3000);
   };
 
   return (

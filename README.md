@@ -11,6 +11,7 @@ A production-deployed Retrieval-Augmented Generation (RAG) system that enables u
 ## Features
 
 - **PDF ingestion** — upload any PDF and have it chunked, embedded, and stored in a vector database
+- **Async ingestion pipeline** — uploads return instantly; parsing/chunking/embedding runs in a background worker (arq + Redis) with live progress streamed back over SSE
 - **Conversational querying** — ask follow-up questions with full conversation memory (last 6 exchanges)
 - **Hallucination detection** — responses are blocked if the LLM cannot ground its answer in the retrieved document chunks
 - **MMR retrieval** — Maximal Marginal Relevance search surfaces diverse, relevant chunks rather than redundant ones
@@ -30,6 +31,7 @@ A production-deployed Retrieval-Augmented Generation (RAG) system that enables u
 | Embeddings | Sentence Transformers `all-MiniLM-L6-v2` (384-dim vectors) |
 | Vector Database | Qdrant Cloud (MMR retrieval, cosine similarity) |
 | AI Orchestration | LangChain (RAG pipeline, conversational memory) |
+| Background Jobs | arq (Redis-backed async task queue) — runs ingestion off the request path |
 | Containerisation | Docker (CPU-optimised, multi-layer caching) |
 | CI/CD | GitHub Actions (build → push → deploy) |
 | Registry | GitHub Container Registry (GHCR) |
@@ -44,21 +46,31 @@ User
  │
  ▼
 Vercel (Next.js)          ← CDN-hosted frontend
- │  /api/chat proxy
- │  /api/ingest proxy
+ │  /api/chat proxy (SSE)
+ │  /api/ingest proxy            /api/ingest/status/[jobId] proxy (SSE)
  ▼
-Render (FastAPI + Docker)  ← containerised backend
+Render (FastAPI + Docker)  ← containerised backend (web process)
  │
- ├──► Qdrant Cloud         ← vector similarity search
+ ├──► enqueues ingest job ──► Redis ──► arq worker (separate process)
+ │                                        │
+ │                                        ├──► LlamaParse       ← PDF parsing
+ │                                        ├──► Qdrant Cloud     ← chunk embed + upsert
+ │                                        └──► writes job progress back to Redis
+ │
+ ├──► Qdrant Cloud         ← vector similarity search (chat)
  └──► OpenRouter API       ← LLM inference (Gemini 2.5 Flash)
 ```
 
-**RAG Pipeline:**
-1. PDF is chunked (500 chars, 50 char overlap) and embedded using `all-MiniLM-L6-v2`
-2. Embeddings are stored in Qdrant Cloud
-3. On each query, MMR retrieval fetches the top 4 diverse relevant chunks (from a pool of 8)
-4. LangChain's `ConversationalRetrievalChain` passes chunks + conversation history to the LLM
-5. Response is validated — if the LLM cannot answer from the document, `grounded: false` is returned
+**Ingestion pipeline (async):**
+1. `POST /ingest` saves the upload to a temp file, enqueues an arq job, and returns a `job_id` immediately — the request never blocks on parsing or embedding.
+2. The arq worker (a separate process from the web server) parses the PDF with LlamaParse, splits it (markdown headers, then a 512-char/64-char-overlap safety net), and embeds+upserts chunks into Qdrant in batches of 32.
+3. The worker writes progress (`parsing` → `chunking` → `embedding N/total` → `done`/`error`) to Redis after each stage.
+4. The frontend opens an `EventSource` on `GET /ingest/status/{job_id}`, which polls Redis and streams progress over SSE until the job finishes.
+
+**Query pipeline:**
+1. On each query, MMR retrieval fetches the top 4 diverse relevant chunks (from a pool of 8)
+2. LangChain's `ConversationalRetrievalChain` passes chunks + conversation history to the LLM
+3. Response is validated — if the LLM cannot answer from the document, `grounded: false` is returned
 
 ---
 
@@ -81,6 +93,8 @@ Push to main
 ```
 
 Pull requests run the build and type-check steps without deploying — broken code cannot reach production.
+
+> **Note:** the backend image now also runs as a second Render service (a Background Worker, command `arq worker.WorkerSettings`) alongside the existing web service, both pointed at the same Render Redis (Key Value) instance via `REDIS_URL`. This is provisioned once in the Render dashboard — the CI workflow above only builds/pushes the image and redeploys the web service.
 
 ---
 
@@ -106,22 +120,36 @@ OPENROUTER_MODEL=google/gemini-2.5-flash
 QDRANT_URL=your_qdrant_url
 QDRANT_API_KEY=your_qdrant_key
 QDRANT_COLLECTION=rag_docs
+LLAMA_CLOUD_API_KEY=your_llama_cloud_key
+REDIS_URL=redis://redis:6379
 ```
 
 ```bash
 docker compose up --build
 ```
 
-Frontend at `http://localhost:3000` — backend at `http://localhost:8000`.
+This starts four services: `redis`, `backend` (FastAPI web server), `worker` (arq — runs PDF parsing/embedding), and `frontend`. Frontend at `http://localhost:3000` — backend at `http://localhost:8000`.
 
 ### Running without Docker
 
-**Backend:**
+**Redis** (required by the ingestion worker):
+```bash
+redis-server
+```
+
+**Backend web server:**
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+echo "REDIS_URL=redis://localhost:6379" >> .env
 uvicorn main:app --reload
+```
+
+**Backend worker** (in a separate terminal, same venv/`.env`):
+```bash
+cd backend
+arq worker.WorkerSettings
 ```
 
 **Frontend:**
@@ -139,8 +167,9 @@ npm run dev
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
-| `POST` | `/ingest` | Upload a PDF (`multipart/form-data`) |
-| `POST` | `/chat` | Send a message `{"message": "..."}` |
+| `POST` | `/ingest` | Upload a PDF (`multipart/form-data`) — returns `{"job_id": "..."}` immediately, processing happens in the background |
+| `GET` | `/ingest/status/{job_id}` | SSE stream of ingestion progress (`parsing` → `chunking` → `embedding N/total` → `done`/`error`) |
+| `POST` | `/chat` | Send a message `{"message": "..."}` — SSE token stream |
 
 **Chat response shape:**
 ```json
@@ -166,6 +195,8 @@ npm run dev
 | `QDRANT_API_KEY` | Qdrant Cloud API key |
 | `QDRANT_COLLECTION` | Collection name |
 | `FRONTEND_URL` | Deployed frontend URL (for CORS) |
+| `LLAMA_CLOUD_API_KEY` | LlamaParse API key (used by the ingestion worker) |
+| `REDIS_URL` | Redis connection string, shared by the web service and the worker (e.g. `redis://localhost:6379`) |
 
 ### Frontend
 | Variable | Description |

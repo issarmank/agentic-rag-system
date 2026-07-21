@@ -11,3 +11,5 @@ llama-parse
 python-dotenv
 python-multipart
 numpy
+arq
+redis
