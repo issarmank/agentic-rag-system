@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import Welcome from './Welcome';
@@ -9,10 +9,11 @@ import type { Chat, Message } from './types';
 import { useSettings } from '@/context/settings';
 
 function makeId() {
-  return 'c' + Date.now();
+  // Doubles as the backend's document-scoping key (X-Session-Id), so it must
+  // be unique per chat, not just per browser tab — crypto.randomUUID() (not
+  // a timestamp) keeps two chats/documents from ever colliding.
+  return crypto.randomUUID();
 }
-
-const SESSION_ID_KEY = 'agentify_session_id';
 
 export default function AgentifyApp() {
   const { settings } = useSettings();
@@ -27,16 +28,6 @@ export default function AgentifyApp() {
   const charBufferRef = useRef('');
   const streamDoneRef = useRef(false);
   const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sessionIdRef = useRef('');
-
-  useEffect(() => {
-    let id = localStorage.getItem(SESSION_ID_KEY);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(SESSION_ID_KEY, id);
-    }
-    sessionIdRef.current = id;
-  }, []);
 
   const active = chats.find((c) => c.id === activeId);
   const isEmpty = !active || active.messages.length === 0;
@@ -138,7 +129,7 @@ export default function AgentifyApp() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-Id': sessionIdRef.current },
+        headers: { 'Content-Type': 'application/json', 'X-Session-Id': currentId },
         body: JSON.stringify({ message: text, history }),
       });
 
@@ -254,7 +245,7 @@ export default function AgentifyApp() {
     try {
       const res = await fetch('/api/ingest', {
         method: 'POST',
-        headers: { 'X-Session-Id': sessionIdRef.current },
+        headers: { 'X-Session-Id': finalId },
         body: form,
       });
       const data = await res.json();

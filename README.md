@@ -35,7 +35,7 @@ A production-deployed Retrieval-Augmented Generation (RAG) system that enables u
 | Containerisation | Docker (CPU-optimised, multi-layer caching) |
 | CI/CD | GitHub Actions (build → push → deploy) |
 | Registry | GitHub Container Registry (GHCR) |
-| Hosting | Vercel (frontend), Render (backend) |
+| Hosting | Vercel (frontend), Azure Container Apps (backend) |
 
 ---
 

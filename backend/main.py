@@ -38,13 +38,15 @@ async def lifespan(app: FastAPI):
     qdrant_client.close()
 
     worker_task = None
-    # Render's free tier only gives us one service, so on Render the arq
-    # worker runs as an asyncio task inside this same process rather than a
-    # second OS process — spawning `arq` as its own process re-imports
+    # Single-container deployments (no separate worker service) run the arq
+    # worker as an asyncio task inside this same process instead of a second
+    # OS process — spawning `arq` as its own process re-imports
     # ingest.py/retriever.py and doubles the embedding model's memory
-    # footprint, which was enough to OOM-kill the 512MB container before it
-    # could even bind a port. `RENDER` is set automatically by Render.
-    if os.getenv("RENDER"):
+    # footprint, which was enough to OOM-kill a 512MB container before it
+    # could even bind a port. Set RUN_WORKER_INPROCESS=true on any host where
+    # this is the only container (e.g. a single Azure Container App); leave
+    # it unset when the worker runs as its own service, as in docker-compose.
+    if os.getenv("RUN_WORKER_INPROCESS", "").lower() == "true":
         _inprocess_worker = Worker(
             functions=WorkerSettings.functions,
             redis_settings=WorkerSettings.redis_settings,
@@ -88,12 +90,11 @@ async def require_shared_secret(x_app_secret: str | None = Header(default=None))
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# --- rate limiting: keyed by session id (falls back to IP) -----------------
-def _rate_limit_key(request: Request) -> str:
-    return request.headers.get("x-session-id") or get_remote_address(request)
-
-
-limiter = Limiter(key_func=_rate_limit_key)
+# --- rate limiting: keyed by IP -----------------
+# x-session-id is client-generated and free to rotate, so it can't be the
+# rate-limit key — that would let anyone mint a fresh UUID per request and
+# bypass the limit entirely against paid upstreams (LlamaParse, OpenRouter).
+limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
