@@ -1,15 +1,25 @@
-import os, json, tempfile, asyncio, traceback, uuid
+import json, logging, os, tempfile, asyncio, uuid
 from contextlib import asynccontextmanager
+
+import redis.asyncio as aioredis
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
 from agent import get_llm
 from retriever import search_with_scores
-from jobs import REDIS_URL, get_status
+from jobs import REDIS_URL, get_status, job_channel
+from ingest import ensure_collection_exists
+from qdrant_client import QdrantClient
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+logger = logging.getLogger(__name__)
 
 _arq_pool: ArqRedis | None = None
 
@@ -18,6 +28,11 @@ _arq_pool: ArqRedis | None = None
 async def lifespan(app: FastAPI):
     global _arq_pool
     _arq_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+    # Ensure the collection and its payload indexes exist before any search
+    # request can race ahead of the first ingest.
+    qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
+    ensure_collection_exists(qdrant_client)
+    qdrant_client.close()
     yield
     await _arq_pool.close()
 
@@ -34,6 +49,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- auth: shared secret between the Next.js server and this backend -------
+# There's no end-user login system. The secret is held only by the Next.js
+# server (never sent to the browser) so the backend can't be hit directly,
+# while /chat and /ingest still stay open to whoever the frontend lets in.
+APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET")
+
+
+async def require_shared_secret(x_app_secret: str | None = Header(default=None)):
+    if not APP_SHARED_SECRET or x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# --- rate limiting: keyed by session id (falls back to IP) -----------------
+def _rate_limit_key(request: Request) -> str:
+    return request.headers.get("x-session-id") or get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 _llm = get_llm()
 
@@ -65,7 +101,10 @@ async def _check_groundedness(answer: str, context: str) -> bool:
         verdict = str(result.content).strip().upper()
         return verdict.startswith("YES")
     except Exception:
-        return True  # fail open — a judge error shouldn't block a valid answer
+        # fail open — a judge error shouldn't block a valid answer — but log
+        # so a persistently down judge model doesn't go unnoticed.
+        logger.warning("Groundedness judge call failed; failing open", exc_info=True)
+        return True
 
 
 _BROAD_KEYWORDS = {
@@ -140,8 +179,9 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
+@app.post("/chat", dependencies=[Depends(require_shared_secret)])
+@limiter.limit("20/minute")
+async def chat(request: Request, req: ChatRequest, x_session_id: str = Header(...)):
     async def generate():
         # --- conversational bypass (no retrieval needed) ---
         if _is_conversational(req.message):
@@ -164,9 +204,10 @@ async def chat(req: ChatRequest):
         broad = _is_broad_query(req.message)
         query = "document overview summary" if broad else _retrieval_query(req.message, req.history)
         try:
-            docs_with_scores = await asyncio.to_thread(search_with_scores, query, 4)
-        except Exception as e:
-            yield _sse({"type": "token", "content": f"Search error: {e}"})
+            docs_with_scores = await asyncio.to_thread(search_with_scores, query, x_session_id, 4)
+        except Exception:
+            logger.exception("Retrieval failed for session %s", x_session_id)
+            yield _sse({"type": "token", "content": "Something went wrong while searching your document. Please try again."})
             yield _sse({"type": "done", "sources": [], "grounded": False})
             return
 
@@ -223,37 +264,75 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.post("/ingest")
-async def ingest(file: UploadFile = File(...)):
-    if not file.filename.endswith(".pdf"):
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+@app.post("/ingest", dependencies=[Depends(require_shared_secret)])
+@limiter.limit("10/minute")
+async def ingest(request: Request, file: UploadFile = File(...), x_session_id: str = Header(...)):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDFs supported")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp_path = tmp.name
+            total = 0
+            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="File too large")
+                tmp.write(chunk)
+    except HTTPException:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
     job_id = uuid.uuid4().hex
-    document_id = os.path.basename(file.filename or "").strip() or job_id
-    await _arq_pool.enqueue_job("run_ingest", tmp_path, job_id, document_id, _job_id=job_id)
+    document_id = os.path.basename(file.filename).strip() or job_id
+    await _arq_pool.enqueue_job(
+        "run_ingest", tmp_path, job_id, x_session_id, document_id, _job_id=job_id
+    )
     return {"job_id": job_id, "document_id": document_id}
 
 
-@app.get("/ingest/status/{job_id}")
+@app.get("/ingest/status/{job_id}", dependencies=[Depends(require_shared_secret)])
 async def ingest_status(job_id: str):
     async def generate():
-        last_stage = None
-        waited = 0.0
-        while True:
-            status = await asyncio.to_thread(get_status, job_id)
-            if status and status != last_stage:
-                last_stage = status
-                yield _sse(status)
-                if status.get("stage") in ("done", "error"):
+        # Event-driven via redis pubsub instead of busy-polling — avoids
+        # spinning up a dedicated poll thread per open SSE stream.
+        r = aioredis.from_url(REDIS_URL, decode_responses=True)
+        pubsub = r.pubsub()
+        channel = job_channel(job_id)
+        await pubsub.subscribe(channel)
+        try:
+            last_sent = await asyncio.to_thread(get_status, job_id)
+            if last_sent:
+                yield _sse(last_sent)
+                if last_sent.get("stage") in ("done", "error"):
                     return
-            await asyncio.sleep(0.4)
-            waited += 0.4
-            if waited > 600:
-                yield _sse({"stage": "error", "message": "Timed out waiting for ingestion"})
-                return
+
+            waited = 0.0
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
+                if message is None:
+                    waited += 5.0
+                    if waited > 600:
+                        yield _sse({"stage": "error", "message": "Timed out waiting for ingestion"})
+                        return
+                    continue
+                payload = json.loads(message["data"])
+                if payload == last_sent:
+                    continue
+                last_sent = payload
+                yield _sse(payload)
+                if payload.get("stage") in ("done", "error"):
+                    return
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+            await r.aclose()
 
     return StreamingResponse(
         generate(),

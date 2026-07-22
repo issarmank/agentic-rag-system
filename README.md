@@ -94,7 +94,7 @@ Push to main
 
 Pull requests run the build and type-check steps without deploying — broken code cannot reach production.
 
-> **Note:** the backend image now also runs as a second Render service (a Background Worker, command `arq worker.WorkerSettings`) alongside the existing web service, both pointed at the same Render Redis (Key Value) instance via `REDIS_URL`. This is provisioned once in the Render dashboard — the CI workflow above only builds/pushes the image and redeploys the web service.
+> **Note:** Render's free tier doesn't support a separate Background Worker service, so the container runs both processes itself — `backend/start.sh` starts `arq worker.WorkerSettings` in the background and `uvicorn` in the foreground within the single free web service. Redis is [Upstash](https://upstash.com) (free tier, standard Redis protocol over `rediss://`) rather than Render's own Redis, which no longer has a free plan.
 
 ---
 
