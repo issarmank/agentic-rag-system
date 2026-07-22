@@ -7,7 +7,9 @@ export async function GET(
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await params;
-  const res = await fetch(`${process.env.BACKEND_URL}/ingest/status/${jobId}`);
+  const res = await fetch(`${process.env.BACKEND_URL}/ingest/status/${jobId}`, {
+    headers: { "X-App-Secret": process.env.APP_SHARED_SECRET ?? "" },
+  });
   return new Response(res.body, {
     headers: {
       "Content-Type": "text/event-stream",

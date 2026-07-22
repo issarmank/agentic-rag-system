@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import Welcome from './Welcome';
@@ -11,6 +11,8 @@ import { useSettings } from '@/context/settings';
 function makeId() {
   return 'c' + Date.now();
 }
+
+const SESSION_ID_KEY = 'agentify_session_id';
 
 export default function AgentifyApp() {
   const { settings } = useSettings();
@@ -25,6 +27,16 @@ export default function AgentifyApp() {
   const charBufferRef = useRef('');
   const streamDoneRef = useRef(false);
   const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionIdRef = useRef('');
+
+  useEffect(() => {
+    let id = localStorage.getItem(SESSION_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(SESSION_ID_KEY, id);
+    }
+    sessionIdRef.current = id;
+  }, []);
 
   const active = chats.find((c) => c.id === activeId);
   const isEmpty = !active || active.messages.length === 0;
@@ -48,10 +60,17 @@ export default function AgentifyApp() {
     // Capture or create a chat id synchronously before any awaits
     let currentId = activeId;
 
+    // Compute the prior turns and the post-append array once, up front, and
+    // reuse both below — history must reflect exactly what we're about to
+    // store, not a separately-derived `active` snapshot that can lag behind
+    // it (e.g. the first message of a brand-new chat, before activeId flushes).
+    const priorMessages = (currentId ? chats.find((c) => c.id === currentId)?.messages : undefined) ?? [];
+    const newMessages: Message[] = [...priorMessages, { role: 'user', text }];
+
     if (!currentId) {
       currentId = makeId();
       setChats((prev) => [
-        { id: currentId!, title: text.slice(0, 38), updated: Date.now(), messages: [{ role: 'user', text }] },
+        { id: currentId!, title: text.slice(0, 38), updated: Date.now(), messages: newMessages },
         ...prev,
       ]);
       setActiveId(currentId);
@@ -63,7 +82,7 @@ export default function AgentifyApp() {
                 ...c,
                 title: c.messages.length === 0 ? text.slice(0, 38) : c.title,
                 updated: Date.now(),
-                messages: [...c.messages, { role: 'user', text }],
+                messages: newMessages,
               }
             : c
         )
@@ -111,7 +130,7 @@ export default function AgentifyApp() {
       }, CHAR_DELAY_MS);
     };
 
-    const history = (active?.messages ?? []).map((m) => ({
+    const history = priorMessages.map((m) => ({
       role: m.role,
       content: m.text,
     }));
@@ -119,7 +138,7 @@ export default function AgentifyApp() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Session-Id': sessionIdRef.current },
         body: JSON.stringify({ message: text, history }),
       });
 
@@ -233,7 +252,11 @@ export default function AgentifyApp() {
     };
 
     try {
-      const res = await fetch('/api/ingest', { method: 'POST', body: form });
+      const res = await fetch('/api/ingest', {
+        method: 'POST',
+        headers: { 'X-Session-Id': sessionIdRef.current },
+        body: form,
+      });
       const data = await res.json();
       if (!data.job_id) {
         fail(data.detail || 'Upload failed. Please try again.');
