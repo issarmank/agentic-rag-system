@@ -3,14 +3,14 @@ import os
 
 from dotenv import load_dotenv
 from langchain_qdrant import QdrantVectorStore
-from langchain_community.embeddings import SentenceTransformerEmbeddings
 from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+from embeddings import get_embeddings
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 _vectorstore = None
 
 
@@ -18,7 +18,7 @@ def get_vectorstore() -> QdrantVectorStore:
     global _vectorstore
     if _vectorstore is None:
         _vectorstore = QdrantVectorStore.from_existing_collection(
-            embedding=_embedding_model,
+            embedding=get_embeddings(),
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY"),
             collection_name=os.getenv("QDRANT_COLLECTION"),

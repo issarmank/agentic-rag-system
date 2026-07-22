@@ -6,11 +6,11 @@ from llama_parse import LlamaParse
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
-from langchain_community.embeddings import SentenceTransformerEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, FilterSelector
 
 from jobs import set_status
+from embeddings import get_embeddings
 
 load_dotenv()
 
@@ -28,13 +28,6 @@ _HEADERS_TO_SPLIT = [
     ("##", "h2"),
     ("###", "h3"),
 ]
-
-# Loaded once per process instead of once per ingest call.
-_embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
-
-
-def get_embeddings():
-    return _embeddings
 
 
 def ensure_collection_exists(client: QdrantClient):

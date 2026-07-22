@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import redis.asyncio as aioredis
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
+from arq.worker import Worker
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,22 +19,47 @@ from jobs import REDIS_URL, get_status, job_channel
 from ingest import ensure_collection_exists
 from qdrant_client import QdrantClient
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from worker import WorkerSettings
 
 logger = logging.getLogger(__name__)
 
 _arq_pool: ArqRedis | None = None
+_inprocess_worker: Worker | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _arq_pool
+    global _arq_pool, _inprocess_worker
     _arq_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
     # Ensure the collection and its payload indexes exist before any search
     # request can race ahead of the first ingest.
     qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
     ensure_collection_exists(qdrant_client)
     qdrant_client.close()
+
+    worker_task = None
+    # Render's free tier only gives us one service, so on Render the arq
+    # worker runs as an asyncio task inside this same process rather than a
+    # second OS process — spawning `arq` as its own process re-imports
+    # ingest.py/retriever.py and doubles the embedding model's memory
+    # footprint, which was enough to OOM-kill the 512MB container before it
+    # could even bind a port. `RENDER` is set automatically by Render.
+    if os.getenv("RENDER"):
+        _inprocess_worker = Worker(
+            functions=WorkerSettings.functions,
+            redis_settings=WorkerSettings.redis_settings,
+            job_timeout=WorkerSettings.job_timeout,
+            max_tries=WorkerSettings.max_tries,
+            max_jobs=WorkerSettings.max_jobs,
+        )
+        worker_task = asyncio.create_task(_inprocess_worker.async_run())
+
     yield
+
+    if _inprocess_worker is not None:
+        await _inprocess_worker.close()
+    if worker_task is not None:
+        worker_task.cancel()
     await _arq_pool.close()
 
 
