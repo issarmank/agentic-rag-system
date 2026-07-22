@@ -1,9 +1,14 @@
+import logging
 import os
+
 from dotenv import load_dotenv
 from langchain_qdrant import QdrantVectorStore
 from langchain_community.embeddings import SentenceTransformerEmbeddings
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 _embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 _vectorstore = None
@@ -21,9 +26,14 @@ def get_vectorstore() -> QdrantVectorStore:
     return _vectorstore
 
 
-def search_with_scores(query: str, k: int = 4) -> list:
-    """Returns list of (Document, float) sorted by descending relevance score."""
+def search_with_scores(query: str, owner: str, k: int = 4) -> list:
+    """Returns list of (Document, float) sorted by descending relevance score,
+    restricted to chunks tagged with the given owner (session id)."""
+    owner_filter = Filter(
+        must=[FieldCondition(key="metadata.owner", match=MatchValue(value=owner))]
+    )
     try:
-        return get_vectorstore().similarity_search_with_score(query, k=k)
+        return get_vectorstore().similarity_search_with_score(query, k=k, filter=owner_filter)
     except Exception:
-        return []
+        logger.exception("Qdrant similarity search failed (owner=%s)", owner)
+        raise

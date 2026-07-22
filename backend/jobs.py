@@ -23,9 +23,17 @@ def _job_key(job_id: str) -> str:
     return f"ingest:job:{job_id}"
 
 
+def job_channel(job_id: str) -> str:
+    return f"ingest:job:{job_id}:events"
+
+
 def set_status(job_id: str, stage: str, **extra) -> None:
     payload = {"stage": stage, **extra}
-    get_redis().set(_job_key(job_id), json.dumps(payload), ex=JOB_TTL_SECONDS)
+    raw = json.dumps(payload)
+    pipe = get_redis().pipeline()
+    pipe.set(_job_key(job_id), raw, ex=JOB_TTL_SECONDS)
+    pipe.publish(job_channel(job_id), raw)
+    pipe.execute()
 
 
 def get_status(job_id: str) -> dict | None:

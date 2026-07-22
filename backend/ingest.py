@@ -44,6 +44,15 @@ def ensure_collection_exists(client: QdrantClient):
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
         )
+    # Filtered searches/deletes run on these fields for every request — without
+    # an index Qdrant falls back to a full collection scan per filter.
+    for field in ("metadata.document_id", "metadata.owner"):
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION, field_name=field, field_schema="keyword"
+            )
+        except Exception:
+            pass  # index already exists
 
 
 def _needs_llamaparse(file_path: str) -> str | None:
@@ -58,17 +67,18 @@ def _needs_llamaparse(file_path: str) -> str | None:
 
         scanned_pages = 0
         table_pages = 0
+        scanned_budget = int(total_pages * SCANNED_PAGE_RATIO)
+        table_budget = int(total_pages * TABLE_PAGE_RATIO)
         for page in doc:
             text = page.get_text("text").strip()
             if len(text) < SCANNED_TEXT_CHARS and page.get_images():
                 scanned_pages += 1
+                if scanned_pages > scanned_budget:
+                    return "scanned"
             if page.find_tables().tables:
                 table_pages += 1
-
-        if scanned_pages / total_pages > SCANNED_PAGE_RATIO:
-            return "scanned"
-        if table_pages / total_pages > TABLE_PAGE_RATIO:
-            return "table-heavy"
+                if table_pages > table_budget:
+                    return "table-heavy"
         return None
     finally:
         doc.close()
@@ -112,7 +122,7 @@ def _parse_with_pymupdf(file_path: str) -> list[Document]:
     ]
 
 
-def ingest_pdf(file_path: str, job_id: str | None = None, document_id: str | None = None) -> int:
+def ingest_pdf(file_path: str, owner: str, job_id: str | None = None, document_id: str | None = None) -> int:
     if document_id is None:
         document_id = os.path.basename(file_path)
 
@@ -156,18 +166,25 @@ def ingest_pdf(file_path: str, job_id: str | None = None, document_id: str | Non
     char_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=64)
     chunks = char_splitter.split_documents(header_chunks)
 
-    # Tag every chunk so we can target-delete by document later
+    # Tag every chunk so we can target-delete by document later and scope
+    # retrieval to the uploading session (owner) — never across sessions.
     for chunk in chunks:
         chunk.metadata["document_id"] = document_id
+        chunk.metadata["owner"] = owner
 
     # Ensure collection exists, then evict only the stale chunks for this
-    # document — other documents' chunks are left untouched (incremental upsert).
+    # owner+document — other documents/owners are left untouched (incremental
+    # upsert). Scoping the delete by owner too means two sessions uploading a
+    # same-named file never clobber each other's chunks.
     ensure_collection_exists(client)
     client.delete(
         collection_name=COLLECTION,
         points_selector=FilterSelector(
             filter=Filter(
-                must=[FieldCondition(key="metadata.document_id", match=MatchValue(value=document_id))]
+                must=[
+                    FieldCondition(key="metadata.document_id", match=MatchValue(value=document_id)),
+                    FieldCondition(key="metadata.owner", match=MatchValue(value=owner)),
+                ]
             )
         ),
     )
