@@ -37,6 +37,37 @@ app.add_middleware(
 
 _llm = get_llm()
 
+# Empirically tune these against real queries/documents — MiniLM cosine
+# similarity for a genuinely relevant chunk is usually well above the floor,
+# but the right cutoff depends on document domain and query phrasing.
+RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.35"))
+CHUNK_SCORE_FLOOR = float(os.getenv("CHUNK_SCORE_FLOOR", "0.25"))
+
+JUDGE_SYSTEM = """\
+You are a strict fact-checker. You will be given DOCUMENT EXCERPTS and an ANSWER \
+generated from them. Decide whether every factual claim in the ANSWER is directly \
+supported by the EXCERPTS.
+Reply with exactly one word: YES if fully supported, NO if the answer contains any \
+claim, number, or detail that is not present in the excerpts."""
+
+
+async def _check_groundedness(answer: str, context: str) -> bool:
+    if not answer.strip():
+        return True
+    judge_messages = [
+        SystemMessage(content=JUDGE_SYSTEM),
+        HumanMessage(
+            content=f"DOCUMENT EXCERPTS:\n{context}\n\nANSWER:\n{answer}\n\nSupported? Reply YES or NO."
+        ),
+    ]
+    try:
+        result = await _llm.ainvoke(judge_messages)
+        verdict = str(result.content).strip().upper()
+        return verdict.startswith("YES")
+    except Exception:
+        return True  # fail open — a judge error shouldn't block a valid answer
+
+
 _BROAD_KEYWORDS = {
     "summarize", "summary", "overview", "what topics", "what is covered",
     "what does this", "what's in this", "what is this document", "tell me about",
@@ -144,8 +175,18 @@ async def chat(req: ChatRequest):
             yield _sse({"type": "done", "sources": [], "grounded": False})
             return
 
+        # --- retrieval-confidence gate ---
+        # "broad" queries are retrieved with a synthetic query ("document overview
+        # summary"), so their scores measure similarity to that stand-in, not to
+        # the user's real question — skip the gate rather than misread them.
+        top_score = max(score for _, score in docs_with_scores)
+        if not broad and top_score < RETRIEVAL_SCORE_THRESHOLD:
+            yield _sse({"type": "token", "content": "I don't see anything in the document about that."})
+            yield _sse({"type": "done", "sources": [], "grounded": False})
+            return
+
         # --- build context ---
-        relevant_docs = [doc for doc, _ in docs_with_scores]
+        relevant_docs = [doc for doc, score in docs_with_scores if broad or score >= CHUNK_SCORE_FLOOR]
         context = "\n\n---\n\n".join(
             f"[Page {doc.metadata.get('page', '?')}]\n{doc.page_content}"
             for doc in relevant_docs
@@ -160,6 +201,7 @@ async def chat(req: ChatRequest):
             messages.append(HumanMessage(content=h.content) if h.role == "user" else AIMessage(content=h.content))
         messages.append(HumanMessage(content=req.message))
 
+        answer_parts = []
         async for chunk in _llm.astream(messages):
             raw = chunk.content
             text = (
@@ -168,9 +210,11 @@ async def chat(req: ChatRequest):
                 else str(raw)
             )
             if text:
+                answer_parts.append(text)
                 yield _sse({"type": "token", "content": text})
 
-        yield _sse({"type": "done", "sources": sources, "grounded": True})
+        grounded = await _check_groundedness("".join(answer_parts), context)
+        yield _sse({"type": "done", "sources": sources, "grounded": grounded})
 
     return StreamingResponse(
         generate(),
@@ -188,8 +232,9 @@ async def ingest(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     job_id = uuid.uuid4().hex
-    await _arq_pool.enqueue_job("run_ingest", tmp_path, job_id, _job_id=job_id)
-    return {"job_id": job_id}
+    document_id = os.path.basename(file.filename or "").strip() or job_id
+    await _arq_pool.enqueue_job("run_ingest", tmp_path, job_id, document_id, _job_id=job_id)
+    return {"job_id": job_id, "document_id": document_id}
 
 
 @app.get("/ingest/status/{job_id}")

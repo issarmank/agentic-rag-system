@@ -8,6 +8,8 @@ langchain-community
 qdrant-client
 sentence-transformers
 llama-parse
+pymupdf
+pymupdf4llm
 python-dotenv
 python-multipart
 numpy

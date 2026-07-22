@@ -10,9 +10,9 @@ from jobs import REDIS_URL, set_status
 load_dotenv()
 
 
-async def run_ingest(ctx, tmp_path: str, job_id: str) -> int:
+async def run_ingest(ctx, tmp_path: str, job_id: str, document_id: str) -> int:
     try:
-        return await asyncio.to_thread(ingest_pdf, tmp_path, job_id)
+        return await asyncio.to_thread(ingest_pdf, tmp_path, job_id, document_id)
     except Exception as e:
         set_status(job_id, "error", message=str(e))
         raise
