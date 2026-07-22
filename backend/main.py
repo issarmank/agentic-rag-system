@@ -1,4 +1,4 @@
-import json, logging, os, tempfile, asyncio, uuid
+import json, logging, os, asyncio, uuid
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -15,7 +15,7 @@ from slowapi.util import get_remote_address
 
 from agent import get_llm
 from retriever import search_with_scores
-from jobs import REDIS_URL, get_status, job_channel
+from jobs import REDIS_URL, get_status, job_channel, set_file_bytes
 from ingest import ensure_collection_exists
 from qdrant_client import QdrantClient
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -300,25 +300,23 @@ async def ingest(request: Request, file: UploadFile = File(...), x_session_id: s
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDFs supported")
 
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp_path = tmp.name
-            total = 0
-            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
-                total += len(chunk)
-                if total > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="File too large")
-                tmp.write(chunk)
-    except HTTPException:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
-
     job_id = uuid.uuid4().hex
+
+    # The web and worker run as separate containers with separate
+    # filesystems, so the upload can't be handed off as a local path — stage
+    # the bytes in Redis and let the worker fetch them by job_id.
+    chunks = []
+    total = 0
+    while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File too large")
+        chunks.append(chunk)
+    set_file_bytes(job_id, b"".join(chunks))
+
     document_id = os.path.basename(file.filename).strip() or job_id
     await _arq_pool.enqueue_job(
-        "run_ingest", tmp_path, job_id, x_session_id, document_id, _job_id=job_id
+        "run_ingest", job_id, x_session_id, document_id, _job_id=job_id
     )
     return {"job_id": job_id, "document_id": document_id}
 
